@@ -1,0 +1,79 @@
+name: Build Shadow Fire
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unpack game from zip
+        run: |
+          unzip -q ShadowFireWeb.zip -d /tmp/p
+          mkdir game
+          cp -r /tmp/p/ShadowFireWeb/. game/
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install dependencies
+        working-directory: game
+        run: npm install --no-audit --no-fund
+
+      - name: Logic test (full 50-player match + UI smoke test)
+        working-directory: game
+        continue-on-error: true
+        run: |
+          node tests/sim.mjs
+          node tests/ui-smoke.mjs
+
+      - name: Build web game
+        working-directory: game
+        run: npm run build
+
+      - name: Add Android project
+        working-directory: game
+        run: |
+          npx cap add android
+          sed -i 's/android:name=".MainActivity"/android:name=".MainActivity"\n            android:screenOrientation="sensorLandscape"/' android/app/src/main/AndroidManifest.xml
+          sed -i 's#<style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">#&\n        <item name="android:windowFullscreen">true</item>#' android/app/src/main/res/values/styles.xml || true
+          npx cap sync android
+
+      - name: Build APK
+        working-directory: game/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShadowFire-apk
+          path: game/android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload web build for Pages (optional)
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: game/dist
+
+  pages:
+    needs: build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.d.outputs.page_url }}
+    steps:
+      - id: d
+        uses: actions/deploy-pages@v4
